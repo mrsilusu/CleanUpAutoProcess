@@ -1,87 +1,104 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from otdrlib import SorReader
-import io
+import os
 
-# ==========================
-# Funções auxiliares
-# ==========================
-def ler_sor(uploaded_file):
-    sor = SorReader(uploaded_file)
-    data = sor.get_trace()
-    df = pd.DataFrame({
-        "distance": data.distance,   # eixo X (distância)
-        "loss": data.loss,           # eixo Y (perda)
-    })
-    return df
+# ==============================
+# Funções utilitárias
+# ==============================
 
-def analisar_fibra(df_anterior, df_atual, fibra_id, distancia_backbone):
-    result = {"fiber_id": fibra_id}
+def parse_sor_csv(uploaded_file, fiber_id, quadrimestre, distancia_troco_km, perda_maxima_dB):
+    """
+    Parser simplificado para ficheiros .sor exportados em CSV/Excel.
+    Lê colunas como: Evento, Distância (km), Perda (dB), Perda Total (dB).
+    """
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
 
-    # Perda máxima (comparação quadrimestres)
-    result["perda_total_anterior"] = df_anterior["loss"].max()
-    result["perda_total_atual"] = df_atual["loss"].max()
-    result["variacao_perda"] = result["perda_total_atual"] - result["perda_total_anterior"]
+    # Calcular perda total (último valor)
+    perda_total = df["Perda Total dB"].iloc[-1] if "Perda Total dB" in df.columns else df["Perda (dB)"].sum()
 
-    # Eventos > 0.2dB no quadrimestre atual
-    eventos = df_atual[df_atual["loss"].diff().fillna(0) > 0.2]
-    if not eventos.empty:
-        result["eventos"] = "; ".join([f"{row.distance:.1f}m ({row.loss:.2f}dB)" for _, row in eventos.iterrows()])
+    # Eventos críticos (>0.2 dB)
+    eventos_criticos = df[df["Perda (dB)"] > 0.2][["Distância (km)", "Perda (dB)"]]
+
+    # Distância final medida
+    distancia_fibra = df["Distância (km)"].max()
+
+    # Diagnóstico fibra
+    if distancia_fibra < distancia_troco_km * 0.95:
+        status = "Partida"
+    elif perda_total > perda_maxima_dB:
+        status = "Atenuada"
     else:
-        result["eventos"] = "Nenhum"
+        status = "OK"
 
-    # Diagnóstico simples
-    if df_atual["distance"].max() < distancia_backbone:
-        result["status"] = "Fibra partida"
-    elif result["perda_total_atual"] > distancia_backbone * 0.35:  # regra exemplo: 0.35 dB/km
-        result["status"] = "Fibra atenuada"
-    else:
-        result["status"] = "OK"
+    return {
+        "Fiber ID": fiber_id,
+        "Quadrimestre": quadrimestre,
+        "Distância Esperada (km)": distancia_troco_km,
+        "Distância Medida (km)": distancia_fibra,
+        "Perda Total (dB)": perda_total,
+        "Eventos Críticos": len(eventos_criticos),
+        "Status": status
+    }
 
-    return result
+def salvar_relatorio(dados, filename="relatorio_consolidado.xlsx"):
+    df = pd.DataFrame(dados)
+    df.to_excel(filename, index=False)
+    return filename
 
-
-# ==========================
+# ==============================
 # Interface Streamlit
-# ==========================
-st.title("📡 Análise de Fibras Ópticas (.sor)")
+# ==============================
+st.set_page_config(page_title="Clean Up AutoProcess", layout="wide")
 
-st.write("Carregue os ficheiros .sor para comparar dois quadrimestres (anterior e atual).")
+st.title("📡 Clean Up AutoProcess")
+st.write("Análise comparativa de testes OTDR por quadrimestre (Plano B - Parser simplificado).")
 
-uploaded_anterior = st.file_uploader("📂 Upload Quadrimestre Anterior (.sor)", type=["sor"], key="anterior")
-uploaded_atual = st.file_uploader("📂 Upload Quadrimestre Atual (.sor)", type=["sor"], key="atual")
+# Inputs principais
+distancia_troco = st.number_input("👉 Distância esperada do troço (km)", min_value=1.0, step=0.5)
+perda_maxima = st.number_input("👉 Perda máxima permitida do link (dB)", min_value=0.1, step=0.1)
 
-distancia_backbone = st.number_input("Distância total do troço (em metros)", min_value=100, value=10000, step=100)
+# Upload de 2 ficheiros
+st.subheader("📂 Importar testes")
+col1, col2 = st.columns(2)
+with col1:
+    file_prev = st.file_uploader("Quadrimestre Anterior", type=["csv", "xlsx"], key="q_prev")
+    q_prev = st.selectbox("Selecione quadrimestre anterior", ["Q1", "Q2", "Q3"], index=0)
+with col2:
+    file_curr = st.file_uploader("Quadrimestre Atual", type=["csv", "xlsx"], key="q_curr")
+    q_curr = st.selectbox("Selecione quadrimestre atual", ["Q1", "Q2", "Q3"], index=1)
 
-if uploaded_anterior and uploaded_atual:
-    st.success("Ficheiros carregados com sucesso ✅")
-
-    df_anterior = ler_sor(uploaded_anterior)
-    df_atual = ler_sor(uploaded_atual)
-
-    # Simulação: 48 fibras (pode ajustar conforme o cabo real)
+# Processamento
+if file_prev and file_curr:
     resultados = []
-    for fibra in range(1, 49):
-        r = analisar_fibra(df_anterior, df_atual, fibra, distancia_backbone)
-        resultados.append(r)
 
-    df_resultado = pd.DataFrame(resultados)
+    for idx, (file, quad) in enumerate([(file_prev, q_prev), (file_curr, q_curr)], start=1):
+        resultado = parse_sor_csv(
+            uploaded_file=file,
+            fiber_id=f"Fibra {idx}",
+            quadrimestre=quad,
+            distancia_troco_km=distancia_troco,
+            perda_maxima_dB=perda_maxima
+        )
+        resultados.append(resultado)
 
-    st.subheader("📊 Resumo das fibras")
-    st.dataframe(df_resultado)
+    # Mostrar resultados
+    df_resumo = pd.DataFrame(resultados)
+    st.subheader("📊 Resultados")
+    st.dataframe(df_resumo)
 
-    # Exportar Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df_resultado.to_excel(writer, index=False, sheet_name="Resumo")
-    st.download_button(
-        label="📥 Baixar resultados em Excel",
-        data=output.getvalue(),
-        file_name="analise_fibras.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Comparação perdas
+    st.subheader("🔎 Comparação entre quadrimestres")
+    diff = resultados[1]["Perda Total (dB)"] - resultados[0]["Perda Total (dB)"]
+    st.write(f"Variação da perda total: **{diff:.2f} dB** ({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})")
 
-    # Botão para limpar histórico
-    if st.button("🗑️ Limpar histórico"):
-        st.experimental_rerun()
+    # Salvar Excel
+    if st.button("💾 Exportar para Excel"):
+        filename = salvar_relatorio(resultados)
+        st.success(f"Relatório salvo como {filename}")
+
+# Limpar histórico
+if st.button("🧹 Limpar histórico"):
+    if os.path.exists("relatorio_consolidado.xlsx"):
+        os.remove("relatorio_consolidado.xlsx")
+    st.success("Histórico limpo com sucesso!")
