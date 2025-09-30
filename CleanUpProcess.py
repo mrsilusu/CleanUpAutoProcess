@@ -1,147 +1,86 @@
 import streamlit as st
-import pandas as pd
 import pdfplumber
 import re
 import os
+import pandas as pd
 
-# ==============================
-# Função: extrair dados do PDF
-# ==============================
-def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima_dB):
-    """
-    Lê relatório OTDR em PDF (texto/tabela ou texto bruto).
-    Extrai:
-      - Fiber ID (nome do arquivo no PDF)
-      - Perda total
-      - Distância esperada
-      - Eventos críticos >0.2 dB
-      - Status (OK, Partida, Atenuada)
-    """
-    fiber_id = os.path.splitext(uploaded_file.name)[0]
-    perda_total = None
-    distancia_fibra = None
-    eventos = []
+st.set_page_config(page_title="Processador OTDR PDF", layout="wide")
 
-    with pdfplumber.open(uploaded_file) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text() or ""
-            # Procurar perda total
-            match_perda = re.search(r"(perda total db|perda do trecho)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            if match_perda:
-                perda_total = float(match_perda.group(2).replace(",", "."))
+st.title("📊 Processador de Relatórios OTDR (PDF)")
 
-            # Procurar distância
-            match_dist = re.search(r"(comprimento do trecho|fim da fibra)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            if match_dist:
-                distancia_fibra = float(match_dist.group(2).replace(",", "."))
+uploaded_file = st.file_uploader("Carregue o relatório OTDR em PDF", type=["pdf"])
 
-            # Procurar eventos críticos
-            eventos_match = re.findall(r"perda db\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            for ev in eventos_match:
-                valor = float(ev.replace(",", "."))
-                if valor > 0.2:
-                    eventos.append(valor)
-
-            # Também tentar buscar em tabelas (se existirem)
-            tables = page.extract_tables()
-            for table in tables:
-                df = pd.DataFrame(table[1:], columns=table[0])
-                df.columns = [c.strip().lower() for c in df.columns]
-
-                if "perda total db" in df.columns:
-                    try:
-                        perda_total = float(df["perda total db"].dropna().iloc[-1])
-                    except:
-                        pass
-
-                if "fim da fibra" in df.columns:
-                    try:
-                        distancia_fibra = float(df["fim da fibra"].dropna().astype(float).max())
-                    except:
-                        pass
-
-                if "perda (db)" in df.columns:
-                    df["perda (db)"] = pd.to_numeric(df["perda (db)"], errors="coerce")
-                    eventos_criticos = df[df["perda (db)"] > 0.2]["perda (db)"].tolist()
-                    eventos.extend(eventos_criticos)
-
-    # Diagnóstico fibra
-    status = "OK"
-    if distancia_fibra is not None and distancia_fibra < distancia_troco_km * 0.95:
-        status = "Partida"
-    elif perda_total is not None and perda_total > perda_maxima_dB:
-        status = "Atenuada"
-
-    return {
-        "Fiber ID": fiber_id,
-        "Quadrimestre": quadrimestre,
-        "Distância Esperada (km)": distancia_troco_km,
-        "Distância Medida (km)": distancia_fibra,
-        "Perda Total (dB)": perda_total,
-        "Eventos Críticos (>0.2 dB)": ", ".join(map(str, eventos)) if eventos else "Nenhum",
-        "Status": status
+# Função para extrair valores do PDF
+def extract_otdr_info(pdf_path):
+    data = {
+        "Fiber ID": None,
+        "Perda Total (dB)": None,
+        "Distância Esperada (Km)": None,
+        "Eventos Críticos": [],
+        "Status": None
     }
 
-# ==============================
-# Função salvar relatório
-# ==============================
-def salvar_relatorio(dados, filename="relatorio_otdr_pdf.xlsx"):
-    df = pd.DataFrame(dados)
-    df.to_excel(filename, index=False)
-    return filename
+    text_content = ""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            text_content += page.extract_text() + "\n"
 
-# ==============================
-# Interface Streamlit
-# ==============================
-st.set_page_config(page_title="Clean Up AutoProcess - PDF", layout="wide")
+    # Fiber ID = nome do arquivo
+    data["Fiber ID"] = os.path.basename(pdf_path)
 
-st.title("📡 Clean Up AutoProcess (PDF)")
-st.write("Analisa relatórios OTDR em PDF (texto/tabela) por quadrimestre.")
+    # Buscar Perda Total
+    perda_match = re.search(r"(Perda Total dB|Perda do trecho)[:\s]*([\d,.]+)", text_content, re.IGNORECASE)
+    if perda_match:
+        data["Perda Total (dB)"] = float(perda_match.group(2).replace(",", "."))
 
-# Inputs principais
-distancia_troco = st.number_input("👉 Distância esperada do troço (km)", min_value=1.0, step=0.5)
-perda_maxima = st.number_input("👉 Perda máxima permitida do link (dB)", min_value=0.1, step=0.1)
+    # Buscar Distância Esperada
+    dist_match = re.search(r"(Fim da Fibra Km|Comprimento do trecho)[:\s]*([\d,.]+)", text_content, re.IGNORECASE)
+    if dist_match:
+        data["Distância Esperada (Km)"] = float(dist_match.group(2).replace(",", "."))
 
-# Upload de 2 PDFs
-st.subheader("📂 Importar relatórios PDF")
-col1, col2 = st.columns(2)
-with col1:
-    file_prev = st.file_uploader("Quadrimestre Anterior (PDF)", type=["pdf"], key="q_prev")
-    q_prev = st.selectbox("Selecione quadrimestre anterior", ["Q1", "Q2", "Q3"], index=0)
-with col2:
-    file_curr = st.file_uploader("Quadrimestre Atual (PDF)", type=["pdf"], key="q_curr")
-    q_curr = st.selectbox("Selecione quadrimestre atual", ["Q1", "Q2", "Q3"], index=1)
+    # Buscar eventos críticos (todas perdas dB > 0.2)
+    eventos = re.findall(r"Perda dB[:\s]*([\d,.]+)", text_content, re.IGNORECASE)
+    eventos_criticos = [float(x.replace(",", ".")) for x in eventos if float(x.replace(",", ".")) > 0.2]
+    data["Eventos Críticos"] = eventos_criticos
 
-# Processamento
-if file_prev and file_curr:
-    resultados = []
+    # Definir Status
+    if data["Distância Esperada (Km)"] is not None and data["Perda Total (dB)"] is not None:
+        # Critérios de avaliação
+        perda_limite = 0.35  # dB/km (ajustável)
+        dist_ok = True  # neste caso não temos a "referência", apenas o extraído
+        perda_ok = data["Perda Total (dB)"] <= perda_limite * (data["Distância Esperada (Km)"] or 1)
 
-    for file, quad in [(file_prev, q_prev), (file_curr, q_curr)]:
-        resultado = parse_pdf_otdr(
-            uploaded_file=file,
-            quadrimestre=quad,
-            distancia_troco_km=distancia_troco,
-            perda_maxima_dB=perda_maxima
-        )
-        resultados.append(resultado)
+        if dist_ok and perda_ok:
+            data["Status"] = "✅ OK"
+        elif not perda_ok:
+            data["Status"] = "⚠️ Atenuada"
+        else:
+            data["Status"] = "❌ Partida"
+    else:
+        data["Status"] = "❓ Informação insuficiente"
 
-    # Mostrar resultados
-    df_resumo = pd.DataFrame(resultados)
-    st.subheader("📊 Resultados")
-    st.dataframe(df_resumo)
+    return data
 
-    # Comparação perdas
-    st.subheader("🔎 Comparação entre quadrimestres")
-    diff = (resultados[1]["Perda Total (dB)"] or 0) - (resultados[0]["Perda Total (dB)"] or 0)
-    st.write(f"Variação da perda total: **{diff:.2f} dB** ({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})")
+if uploaded_file:
+    with open("temp.pdf", "wb") as f:
+        f.write(uploaded_file.getbuffer())
 
-    # Salvar Excel
-    if st.button("💾 Exportar para Excel"):
-        filename = salvar_relatorio(resultados)
-        st.success(f"Relatório salvo como {filename}")
+    result = extract_otdr_info("temp.pdf")
 
-# Limpar histórico
-if st.button("🧹 Limpar histórico"):
-    if os.path.exists("relatorio_otdr_pdf.xlsx"):
-        os.remove("relatorio_otdr_pdf.xlsx")
-    st.success("Histórico limpo com sucesso!")
+    # Exibir resultados em tabela
+    df = pd.DataFrame([{
+        "Fiber ID": result["Fiber ID"],
+        "Perda Total (dB)": result["Perda Total (dB)"],
+        "Distância Esperada (Km)": result["Distância Esperada (Km)"],
+        "Eventos Críticos": ", ".join([str(e) for e in result["Eventos Críticos"]]),
+        "Status": result["Status"]
+    }])
+
+    st.subheader("📋 Resultado da Análise")
+    st.dataframe(df)
+
+    # Mostrar texto bruto (debug)
+    with st.expander("🔎 Texto extraído do PDF"):
+        with pdfplumber.open("temp.pdf") as pdf:
+            for i, page in enumerate(pdf.pages):
+                st.text_area(f"Página {i+1}", page.extract_text(), height=200)
