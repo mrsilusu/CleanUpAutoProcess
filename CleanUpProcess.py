@@ -1,133 +1,131 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
-from datetime import datetime
+import re
+from pyOTDR.OTDR import OTDRReader
 
-# Limites de perda por comprimento de onda (dB/km)
-LIMITES_PERDA = {1550: 0.22, 1310: 0.33}
+# ==============================
+# Função para ler arquivos .sor
+# ==============================
+def ler_sor(arquivo, fiber_id=None):
+    """
+    Lê informações de um arquivo OTDR (.sor).
+    Retorna dataframe com:
+    - Fiber ID
+    - Perda total
+    - Distância
+    - Eventos (lista de tuplas: perda, distância)
+    """
+    otdr = OTDRReader(arquivo)
 
-# ======================
-# Função para simular leitura de .SOR
-# ======================
-def parse_sor(file_name, content):
-    """Simula extração de dados de um arquivo .sor"""
-    fiber_id = os.path.splitext(file_name)[0]
-    data_teste = datetime.now().strftime("%Y-%m-%d")
-    perda_total = round(0.1 + 0.05 * (hash(fiber_id) % 5), 3)
-    onda = 1550
-    distancia = round(10 + (hash(fiber_id) % 30) * 0.5, 2)
+    # Identificação da fibra
+    if fiber_id is None:
+        nome = arquivo.name if hasattr(arquivo, "name") else str(arquivo)
+        match = re.search(r"(\d+)", nome)
+        fiber_id = int(match.group(1)) if match else 0
 
-    return {
-        "Fibra": fiber_id,
-        "Data": data_teste,
-        "Perda(dB)": perda_total,
-        "Comprimento de Onda(nm)": onda,
-        "Distância(km)": distancia
-    }
+    # Distância total da fibra
+    distancia = round(otdr.getFiberLength() / 1000, 2)  # m → km
 
-# ======================
-# Normalização de colunas
-# ======================
-def normalize_columns(df):
-    mapping = {}
-    for col in df.columns:
-        c = str(col).lower().strip()
-        if "fiber" in c or "fibra" in c:
-            mapping[col] = "Fibra"
-        elif "data" in c:
-            mapping[col] = "Data"
-        elif "perda" in c or "loss" in c:
-            mapping[col] = "Perda(dB)"
-        elif "onda" in c or "1310" in c or "1550" in c:
-            mapping[col] = "Comprimento de Onda(nm)"
-        elif "dist" in c or "km" in c:
-            mapping[col] = "Distância(km)"
-        else:
-            mapping[col] = col
-    df = df.rename(columns=mapping)
-    if "Data" in df.columns:
-        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    return df
+    # Perda total
+    perda_total = round(otdr.getTotalLoss(), 2)
 
-# ======================
-# Carregar consolidado
-# ======================
-def carregar_consolidado(nome_arquivo="consolidado.csv"):
-    if os.path.exists(nome_arquivo):
-        df = pd.read_csv(nome_arquivo, encoding="utf-8")
-        df = normalize_columns(df)
-        return df
-    return pd.DataFrame(columns=["Fibra", "Data", "Perda(dB)", "Comprimento de Onda(nm)", "Distância(km)"])
+    # Eventos
+    eventos = []
+    for ev in otdr.getEvents():
+        perda = round(ev["loss"], 2)
+        pos = round(ev["distance"] / 1000, 2)  # m → km
+        eventos.append((perda, pos))
 
-# ======================
-# Salvar consolidado
-# ======================
-def salvar_consolidado(df, nome_arquivo="consolidado.csv"):
-    df.to_csv(nome_arquivo, index=False, encoding="utf-8")
+    return pd.DataFrame([{
+        "fiber_id": fiber_id,
+        "perda_total_dB": perda_total,
+        "distancia_km": distancia,
+        "eventos": eventos
+    }])
 
-# ======================
-# Análise comparativa
-# ======================
-def analisar_dados(df):
-    if df.empty:
-        st.warning("⚠️ Nenhum dado disponível para análise.")
-        return
-
-    df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
-    df['Quadrimestre'] = df['Data'].dt.month.apply(lambda m: (m-1)//4 + 1)
-
-    agrupado = df.groupby(["Fibra", "Quadrimestre"]).agg({
-        "Perda(dB)": "mean",
-        "Distância(km)": "mean",
-        "Comprimento de Onda(nm)": "first"
-    }).reset_index()
-
+# ==============================
+# Comparação entre quadrimestres
+# ==============================
+def analisar_comparacao(df_ant, df_atual, quadrimestre_ant, quadrimestre_atual, distancia_troco, perda_max_troco):
     resultados = []
-    for fibra in agrupado['Fibra'].unique():
-        dados_fibra = agrupado[agrupado['Fibra'] == fibra].sort_values("Quadrimestre")
-        dados_fibra = dados_fibra.set_index("Quadrimestre")
-        for q in [1, 2, 3]:
-            if q in dados_fibra.index and ((q % 3) + 1) in dados_fibra.index:
-                perda_q = dados_fibra.loc[q, "Perda(dB)"]
-                perda_q_next = dados_fibra.loc[(q % 3) + 1, "Perda(dB)"]
-                distancia = dados_fibra.loc[q, "Distância(km)"]
-                onda = dados_fibra.loc[q, "Comprimento de Onda(nm)"]
-                perda_esperada = LIMITES_PERDA.get(onda, 0.25) * distancia
-                aumento = round(perda_q_next - perda_q, 3)
-                status = "⚠️ ALERTA" if perda_q_next > perda_esperada else "✅ OK"
-                resultados.append([fibra, f"Q{q}->Q{(q%3)+1}", perda_q, perda_q_next, perda_esperada, aumento, status])
+    for _, row_atual in df_atual.iterrows():
+        fid = row_atual["fiber_id"]
+        perda_atual = row_atual["perda_total_dB"]
+        dist_atual = row_atual["distancia_km"]
 
-    df_result = pd.DataFrame(resultados, columns=["Fibra", "Comparação", "Perda Inicial", "Perda Final", "Perda Esperada", "Δ Perda", "Status"])
-    if df_result.empty:
-        st.info("⏳ Aguardando dados de mais quadrimestres para iniciar comparações.")
-    else:
-        st.subheader("📊 Resultados Comparativos")
-        st.dataframe(df_result)
+        # Procurar fibra no quadrimestre anterior
+        row_ant = df_ant[df_ant["fiber_id"] == fid]
+        perda_ant = row_ant["perda_total_dB"].iloc[0] if not row_ant.empty else 0.0
 
-# ======================
-# Interface Streamlit
-# ======================
-def main():
-    st.title("📡 Clean Up AutoProcess")
-    st.write("Plataforma de análise de testes OTDR (.sor) com comparativos quadrimestrais.")
+        # Variação
+        variacao = round(perda_atual - perda_ant, 2)
 
-    df = carregar_consolidado()
+        # Eventos críticos
+        eventos_criticos = [f"{ev[0]}dB @ {ev[1]}km" for ev in row_atual["eventos"] if ev[0] > 0.2]
 
-    uploaded_files = st.file_uploader("📂 Envie arquivos .SOR", type=["sor"], accept_multiple_files=True)
+        # Estado
+        if dist_atual < distancia_troco:
+            estado = "Partida"
+        elif perda_atual > perda_max_troco:
+            estado = "Atenuada"
+        else:
+            estado = "OK"
 
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            novo_registro = parse_sor(uploaded_file.name, uploaded_file.getvalue())
-            df = pd.concat([df, pd.DataFrame([novo_registro])], ignore_index=True)
-            df = normalize_columns(df)
+        resultados.append({
+            "Fiber ID": fid,
+            f"Perda {quadrimestre_ant}": perda_ant,
+            f"Perda {quadrimestre_atual}": perda_atual,
+            "Variação dB": variacao,
+            "Eventos >0.2dB": "; ".join(eventos_criticos),
+            "Estado": estado
+        })
+    return pd.DataFrame(resultados)
 
-        salvar_consolidado(df)
-        st.success(f"{len(uploaded_files)} arquivos importados com sucesso!")
+# ==============================
+# Streamlit UI
+# ==============================
+st.title("📡 Clean Up AutoProcess – Análise OTDR (com parser real)")
 
-    if not df.empty:
-        st.subheader("📋 Dados Consolidados")
-        st.dataframe(df.tail(20))  # mostra últimas 20 linhas
-        analisar_dados(df)
+quadrimestre_ant = st.selectbox("Quadrimestre anterior", ["Q1", "Q2", "Q3"])
+quadrimestre_atual = st.selectbox("Quadrimestre atual", ["Q1", "Q2", "Q3"])
+distancia_troco = st.number_input("Distância do troço (km)", min_value=0.1, value=10.0)
+perda_max_troco = st.number_input("Perda máxima do link (dB)", min_value=0.1, value=2.0)
 
-if __name__ == "__main__":
-    main()
+# Upload
+st.subheader("Importar arquivos .sor")
+files_ant = st.file_uploader("Quadrimestre anterior (.sor)", type=["sor"], accept_multiple_files=True)
+files_atual = st.file_uploader("Quadrimestre atual (.sor)", type=["sor"], accept_multiple_files=True)
+
+if files_ant and files_atual:
+    st.success("✔️ Arquivos carregados. Processando...")
+
+    # Ler todos os arquivos (um dataframe por quadrimestre)
+    df_ant = pd.concat([ler_sor(f) for f in files_ant], ignore_index=True)
+    df_atual = pd.concat([ler_sor(f) for f in files_atual], ignore_index=True)
+
+    # Comparação
+    df_resultados = analisar_comparacao(df_ant, df_atual,
+                                        quadrimestre_ant, quadrimestre_atual,
+                                        distancia_troco, perda_max_troco)
+
+    st.subheader("📊 Resultados da Comparação")
+    st.dataframe(df_resultados)
+
+    # Resumo geral
+    st.subheader("📋 Resumo")
+    resumo = df_resultados[["Fiber ID", f"Perda {quadrimestre_atual}", "Estado"]]
+    st.dataframe(resumo)
+
+    # Exportar
+    st.download_button("⬇️ Baixar CSV",
+                       df_resultados.to_csv(index=False).encode("utf-8"),
+                       "resultado_otdr.csv",
+                       "text/csv")
+
+# Botão limpar histórico
+if st.button("🧹 Limpar histórico"):
+    if os.path.exists("resultado_otdr.csv"):
+        os.remove("resultado_otdr.csv")
+    st.warning("Histórico limpo.")
