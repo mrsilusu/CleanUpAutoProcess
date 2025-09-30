@@ -1,27 +1,49 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import pdfplumber
 import os
 
 # ==============================
-# Funções utilitárias
+# Função: extrair dados do PDF
 # ==============================
-
-def parse_sor_csv(uploaded_file, fiber_id, quadrimestre, distancia_troco_km, perda_maxima_dB):
+def parse_pdf_otdr(uploaded_file, fiber_id, quadrimestre, distancia_troco_km, perda_maxima_dB):
     """
-    Parser simplificado para ficheiros .sor exportados em CSV/Excel.
-    Lê colunas como: Evento, Distância (km), Perda (dB), Perda Total (dB).
+    Lê relatório OTDR em PDF (formato texto/tabela).
+    Extrai distância, perda total e eventos críticos.
     """
-    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
+    eventos = []
+    perda_total = 0.0
+    distancia_fibra = 0.0
 
-    # Calcular perda total (último valor)
-    perda_total = df["Perda Total dB"].iloc[-1] if "Perda Total dB" in df.columns else df["Perda (dB)"].sum()
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables()
+            for table in tables:
+                df = pd.DataFrame(table[1:], columns=table[0])  # primeira linha = header
 
-    # Eventos críticos (>0.2 dB)
-    eventos_criticos = df[df["Perda (dB)"] > 0.2][["Distância (km)", "Perda (dB)"]]
+                # Normalizar nomes de colunas
+                df.columns = [c.strip().lower() for c in df.columns]
 
-    # Distância final medida
-    distancia_fibra = df["Distância (km)"].max()
+                # Procurar perda total
+                if "perda total db" in df.columns:
+                    try:
+                        perda_total = float(df["perda total db"].dropna().iloc[-1])
+                    except:
+                        pass
+
+                # Procurar distância
+                if "distância" in df.columns:
+                    try:
+                        distancia_fibra = float(df["distância"].dropna().astype(float).max())
+                    except:
+                        pass
+
+                # Procurar eventos críticos >0.2 dB
+                if "perda (db)" in df.columns and "distância" in df.columns:
+                    df["perda (db)"] = pd.to_numeric(df["perda (db)"], errors="coerce")
+                    df["distância"] = pd.to_numeric(df["distância"], errors="coerce")
+                    eventos_criticos = df[df["perda (db)"] > 0.2][["distância", "perda (db)"]]
+                    eventos.extend(eventos_criticos.values.tolist())
 
     # Diagnóstico fibra
     if distancia_fibra < distancia_troco_km * 0.95:
@@ -37,11 +59,14 @@ def parse_sor_csv(uploaded_file, fiber_id, quadrimestre, distancia_troco_km, per
         "Distância Esperada (km)": distancia_troco_km,
         "Distância Medida (km)": distancia_fibra,
         "Perda Total (dB)": perda_total,
-        "Eventos Críticos": len(eventos_criticos),
+        "Eventos Críticos": len(eventos),
         "Status": status
     }
 
-def salvar_relatorio(dados, filename="relatorio_consolidado.xlsx"):
+# ==============================
+# Função salvar relatório
+# ==============================
+def salvar_relatorio(dados, filename="relatorio_otdr_pdf.xlsx"):
     df = pd.DataFrame(dados)
     df.to_excel(filename, index=False)
     return filename
@@ -49,23 +74,23 @@ def salvar_relatorio(dados, filename="relatorio_consolidado.xlsx"):
 # ==============================
 # Interface Streamlit
 # ==============================
-st.set_page_config(page_title="Clean Up AutoProcess", layout="wide")
+st.set_page_config(page_title="Clean Up AutoProcess - PDF", layout="wide")
 
-st.title("📡 Clean Up AutoProcess")
-st.write("Análise comparativa de testes OTDR por quadrimestre (Plano B - Parser simplificado).")
+st.title("📡 Clean Up AutoProcess (PDF)")
+st.write("Analisa relatórios OTDR em PDF (texto/tabela) por quadrimestre.")
 
 # Inputs principais
 distancia_troco = st.number_input("👉 Distância esperada do troço (km)", min_value=1.0, step=0.5)
 perda_maxima = st.number_input("👉 Perda máxima permitida do link (dB)", min_value=0.1, step=0.1)
 
-# Upload de 2 ficheiros
-st.subheader("📂 Importar testes")
+# Upload de 2 PDFs
+st.subheader("📂 Importar relatórios PDF")
 col1, col2 = st.columns(2)
 with col1:
-    file_prev = st.file_uploader("Quadrimestre Anterior", type=["csv", "xlsx"], key="q_prev")
+    file_prev = st.file_uploader("Quadrimestre Anterior (PDF)", type=["pdf"], key="q_prev")
     q_prev = st.selectbox("Selecione quadrimestre anterior", ["Q1", "Q2", "Q3"], index=0)
 with col2:
-    file_curr = st.file_uploader("Quadrimestre Atual", type=["csv", "xlsx"], key="q_curr")
+    file_curr = st.file_uploader("Quadrimestre Atual (PDF)", type=["pdf"], key="q_curr")
     q_curr = st.selectbox("Selecione quadrimestre atual", ["Q1", "Q2", "Q3"], index=1)
 
 # Processamento
@@ -73,7 +98,7 @@ if file_prev and file_curr:
     resultados = []
 
     for idx, (file, quad) in enumerate([(file_prev, q_prev), (file_curr, q_curr)], start=1):
-        resultado = parse_sor_csv(
+        resultado = parse_pdf_otdr(
             uploaded_file=file,
             fiber_id=f"Fibra {idx}",
             quadrimestre=quad,
@@ -99,6 +124,6 @@ if file_prev and file_curr:
 
 # Limpar histórico
 if st.button("🧹 Limpar histórico"):
-    if os.path.exists("relatorio_consolidado.xlsx"):
-        os.remove("relatorio_consolidado.xlsx")
+    if os.path.exists("relatorio_otdr_pdf.xlsx"):
+        os.remove("relatorio_otdr_pdf.xlsx")
     st.success("Histórico limpo com sucesso!")
