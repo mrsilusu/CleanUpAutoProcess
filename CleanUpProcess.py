@@ -25,19 +25,30 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
-            # Procurar perda total
-            match_perda = re.search(r"(perda total db|perda do trecho)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+
+            # Procurar perda total (com regex mais robusto)
+            match_perda = re.search(
+                r"(perda\s*total\s*(\(db\))?|perda\s*do\s*trecho)\s*[:=]?\s*([\d.,]+)",
+                text,
+                re.IGNORECASE,
+            )
             if match_perda:
-                perda_total = float(match_perda.group(2).replace(",", "."))
+                perda_total = float(match_perda.group(3).replace(",", "."))
 
-            # Procurar distância
-            match_dist = re.search(r"(comprimento do trecho|fim da fibra)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            # Procurar distância esperada (fim da fibra ou comprimento do trecho)
+            match_dist = re.search(
+                r"(comprimento\s*do\s*trecho|fim\s*da\s*fibra(\s*km)?)\s*[:=]?\s*([\d.,]+)",
+                text,
+                re.IGNORECASE,
+            )
             if match_dist:
-                distancia_fibra = float(match_dist.group(2).replace(",", "."))
+                distancia_fibra = float(match_dist.group(3).replace(",", "."))
 
-            # Procurar eventos críticos
-            eventos_match = re.findall(r"perda db\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            for ev in eventos_match:
+            # Procurar eventos críticos no texto (Perda dB > 0.2)
+            eventos_match = re.findall(
+                r"perda\s*(\(db\))?\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE
+            )
+            for _, ev in eventos_match:
                 valor = float(ev.replace(",", "."))
                 if valor > 0.2:
                     eventos.append(valor)
@@ -45,6 +56,8 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
             # Também tentar buscar em tabelas (se existirem)
             tables = page.extract_tables()
             for table in tables:
+                if not table or len(table) < 2:
+                    continue
                 df = pd.DataFrame(table[1:], columns=table[0])
                 df.columns = [c.strip().lower() for c in df.columns]
 
@@ -79,7 +92,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
         "Distância Medida (km)": distancia_fibra,
         "Perda Total (dB)": perda_total,
         "Eventos Críticos (>0.2 dB)": ", ".join(map(str, eventos)) if eventos else "Nenhum",
-        "Status": status
+        "Status": status,
     }
 
 # ==============================
@@ -121,7 +134,7 @@ if file_prev and file_curr:
             uploaded_file=file,
             quadrimestre=quad,
             distancia_troco_km=distancia_troco,
-            perda_maxima_dB=perda_maxima
+            perda_maxima_dB=perda_maxima,
         )
         resultados.append(resultado)
 
@@ -133,7 +146,10 @@ if file_prev and file_curr:
     # Comparação perdas
     st.subheader("🔎 Comparação entre quadrimestres")
     diff = (resultados[1]["Perda Total (dB)"] or 0) - (resultados[0]["Perda Total (dB)"] or 0)
-    st.write(f"Variação da perda total: **{diff:.2f} dB** ({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})")
+    st.write(
+        f"Variação da perda total: **{diff:.2f} dB** "
+        f"({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})"
+    )
 
     # Salvar Excel
     if st.button("💾 Exportar para Excel"):
