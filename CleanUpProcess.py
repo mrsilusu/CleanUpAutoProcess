@@ -14,6 +14,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
       - Fiber ID (nome do arquivo no PDF)
       - Perda total
       - Distância esperada
+      - Fim da Fibra Km -> Distância Testada
       - Eventos (tabela)
       - Status (OK, Partida, Atenuada)
     """
@@ -31,8 +32,8 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
             if match_perda:
                 perda_total = float(match_perda.group(2).replace(",", "."))
 
-            # Procurar distância
-            match_dist = re.search(r"(comprimento do trecho|fim da fibra)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            # Procurar distância testada -> "Fim da Fibra Km"
+            match_dist = re.search(r"(fim da fibra km)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
             if match_dist:
                 distancia_fibra = float(match_dist.group(2).replace(",", "."))
 
@@ -59,6 +60,20 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                             eventos.append(ev)
                         except Exception:
                             continue
+
+                # Perda total também pode estar em tabela
+                if "perda total db" in df.columns:
+                    try:
+                        perda_total = float(df["perda total db"].dropna().iloc[-1])
+                    except:
+                        pass
+
+                # Distância testada também pode estar como "fim da fibra"
+                if "fim da fibra" in df.columns:
+                    try:
+                        distancia_fibra = float(df["fim da fibra"].dropna().astype(float).max())
+                    except:
+                        pass
 
     # Diagnóstico fibra
     status = "OK"
