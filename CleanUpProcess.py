@@ -7,67 +7,7 @@ import os
 # ==============================
 # Função: extrair dados do PDF
 # ==============================
-def parse_pdf_otdr(uploaimport streamlit as st
-import pdfplumber
-import pandas as pd
-
-# Função para extrair a tabela de eventos do PDF
-def extrair_eventos_pdf(file):
-    eventos = []
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            tables = page.extract_tables()
-            for table in tables:
-                if table and "Evento" in table[0]:  # Detecta cabeçalho
-                    header = table[0]
-                    for row in table[1:]:
-                        if len(row) >= 5:
-                            eventos.append({
-                                "Evento": row[0],
-                                "Distância Km": row[1],
-                                "Perda dB": row[2],
-                                "Reflect. dB": row[3],
-                                "P. Total dB": row[4],
-                            })
-    return pd.DataFrame(eventos)
-
-# Interface principal
-st.title("Analisador de Eventos OTDR - PDF")
-
-uploaded_file = st.file_uploader("📂 Carregar relatório OTDR em PDF", type=["pdf"])
-
-if uploaded_file is not None:
-    st.success("✅ PDF carregado com sucesso!")
-
-    # Extrair eventos do PDF
-    eventos_df = extrair_eventos_pdf(uploaded_file)
-
-    if not eventos_df.empty:
-        st.subheader("📋 Tabela de Eventos Extraída do PDF")
-        st.dataframe(eventos_df)
-
-        # Construir resumo - ATUALIZAÇÃO AQUI
-        resumo_df = pd.DataFrame({
-            "Evento": eventos_df["Evento"],
-            "Distância Testada (km)": eventos_df["Distância Km"],  # ← extraído direto do PDF
-            "Perda Total (dB)": eventos_df["Perda dB"],           # ← extraído direto do PDF
-        })
-
-        st.subheader("📊 Resumo de Resultados")
-        st.dataframe(resumo_df)
-
-        # Exportar resultados em CSV
-        csv = resumo_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="⬇️ Baixar resumo em CSV",
-            data=csv,
-            file_name="resumo_eventos.csv",
-            mime="text/csv"
-        )
-
-    else:
-        st.warning("⚠️ Nenhuma tabela de eventos foi encontrada no PDF.")
-ded_file, quadrimestre, distancia_troco_km, perda_maxima_dB):
+def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima_dB):
     """
     Lê relatório OTDR em PDF (texto/tabela).
     Extrai:
