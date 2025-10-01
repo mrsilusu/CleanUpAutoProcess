@@ -1,61 +1,191 @@
 import streamlit as st
-import pdfplumber
 import pandas as pd
+import pdfplumber
+import re
+import os
 
 # ==============================
-# Função para extrair eventos
+# Função: extrair dados do PDF
 # ==============================
-def extrair_eventos_pdf(arquivo_pdf):
+def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima_dB):
+    """
+    Lê relatório OTDR em PDF (texto/tabela).
+    Extrai:
+      - Fiber ID (nome do arquivo no PDF)
+      - Perda total
+      - Distância esperada
+      - Eventos (tabela)
+      - Status (OK, Partida, Atenuada)
+    """
+    fiber_id = os.path.splitext(uploaded_file.name)[0]
+    perda_total = None
+    distancia_fibra = None
     eventos = []
-    with pdfplumber.open(arquivo_pdf) as pdf:
-        for pagina in pdf.pages:
-            tabelas = pagina.extract_tables()
-            for tabela in tabelas:
-                if not tabela:
+
+    with pdfplumber.open(uploaded_file) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+
+            # Procurar perda total
+            match_perda = re.search(r"(perda total db|perda do trecho)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            if match_perda:
+                perda_total = float(match_perda.group(2).replace(",", "."))
+
+            # Procurar distância
+            match_dist = re.search(r"(comprimento do trecho|fim da fibra)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            if match_dist:
+                distancia_fibra = float(match_dist.group(2).replace(",", "."))
+
+            # Procurar tabelas
+            tables = page.extract_tables()
+            for table in tables:
+                if not table or len(table) < 2:
                     continue
 
-                colunas = tabela[0]
-                if "Evento" in colunas:
-                    for linha in tabela[1:]:
-                        if len(linha) >= 5:  # Garante que há todas as colunas
-                            evento = {
-                                "Evento": linha[0],
-                                "Distância Testada (km)": linha[1],
-                                "Perda Total (dB)": linha[2],  # aqui usamos Perda dB
-                                "Reflect. dB": linha[3],
-                                "P. Total dB": linha[4]
+                df = pd.DataFrame(table[1:], columns=table[0])
+                df.columns = [c.strip().lower() for c in df.columns]
+
+                # Se a tabela for a de eventos (coluna "evento")
+                if "evento" in df.columns:
+                    for _, row in df.iterrows():
+                        try:
+                            ev = {
+                                "Evento": row.get("evento"),
+                                "Distância Testada (km)": str(row.get("distância km") or "").replace(",", "."),
+                                "Perda Total (dB)": str(row.get("perda db") or "").replace(",", "."),
+                                "Reflect. dB": row.get("reflect. db", ""),
+                                "P. Total dB": row.get("p. total db", "")
                             }
-                            eventos.append(evento)
-    return pd.DataFrame(eventos)
+                            eventos.append(ev)
+                        except Exception:
+                            continue
+
+    # Diagnóstico fibra
+    status = "OK"
+    if distancia_fibra is not None and distancia_fibra < distancia_troco_km * 0.95:
+        status = "Partida"
+    elif perda_total is not None and perda_total > perda_maxima_dB:
+        status = "Atenuada"
+
+    return {
+        "Fiber ID": fiber_id,
+        "Quadrimestre": quadrimestre,
+        "Distância Esperada (km)": distancia_troco_km,
+        "Distância Testada (km)": distancia_fibra,
+        "Perda Total (dB)": perda_total,
+        "Eventos": eventos if eventos else "Nenhum",
+        "Status": status
+    }
+
+# ==============================
+# Função salvar relatório
+# ==============================
+def salvar_relatorio(dados, filename="relatorio_otdr_pdf.xlsx"):
+    # salvar resumo
+    df = pd.DataFrame([{
+        "Fiber ID": d["Fiber ID"],
+        "Quadrimestre": d["Quadrimestre"],
+        "Distância Esperada (km)": d["Distância Esperada (km)"],
+        "Distância Testada (km)": d["Distância Testada (km)"],
+        "Perda Total (dB)": d["Perda Total (dB)"],
+        "Status": d["Status"]
+    } for d in dados])
+    df.to_excel(filename, index=False)
+
+    # salvar eventos detalhados em outra aba
+    with pd.ExcelWriter(filename, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+        for d in dados:
+            if isinstance(d["Eventos"], list):
+                df_ev = pd.DataFrame(d["Eventos"])
+                df_ev.to_excel(writer, sheet_name=f"{d['Quadrimestre']}_eventos", index=False)
+
+    return filename
+
+# ==============================
+# Função calcular perda máxima
+# ==============================
+def calcular_perda_maxima(distancia, comprimento_onda):
+    if comprimento_onda == 1310:
+        return distancia * 0.33
+    elif comprimento_onda == 1550:
+        return distancia * 0.22
+    else:
+        return None
 
 # ==============================
 # Interface Streamlit
 # ==============================
-st.set_page_config(page_title="Extração de Eventos OTDR", layout="wide")
+st.set_page_config(page_title="Clean Up AutoProcess - PDF", layout="wide")
 
-st.title("📊 Extração de Eventos do Relatório OTDR")
+st.title("📡 Clean Up AutoProcess (PDF)")
+st.write("Analisa relatórios OTDR em PDF (texto/tabela) por quadrimestre.")
 
-# Upload do PDF
-arquivo_pdf = st.file_uploader("Carregue o PDF do relatório OTDR", type="pdf")
+# Inputs principais
+distancia_troco = st.number_input("👉 Distância esperada do troço (km)", min_value=1.0, step=0.5)
+
+# Escolha do comprimento de onda
+comprimento_onda = st.selectbox("👉 Selecione o comprimento de onda (nm)", [1310, 1550], index=1)
+
+# Cálculo automático da perda máxima
+perda_maxima = calcular_perda_maxima(distancia_troco, comprimento_onda)
+st.write(f"🔎 **Perda máxima permitida do link (dB): {perda_maxima:.2f}**")
+
+# Upload de 2 PDFs
+st.subheader("📂 Importar relatórios PDF")
+col1, col2 = st.columns(2)
+with col1:
+    file_prev = st.file_uploader("Quadrimestre Anterior (PDF)", type=["pdf"], key="q_prev")
+    q_prev = st.selectbox("Selecione quadrimestre anterior", ["Q1", "Q2", "Q3"], index=0)
+with col2:
+    file_curr = st.file_uploader("Quadrimestre Atual (PDF)", type=["pdf"], key="q_curr")
+    q_curr = st.selectbox("Selecione quadrimestre atual", ["Q1", "Q2", "Q3"], index=1)
 
 # Processamento
-if arquivo_pdf is not None:
-    try:
-        eventos_df = extrair_eventos_pdf(arquivo_pdf)
+if file_prev and file_curr:
+    resultados = []
 
-        if not eventos_df.empty:
-            st.success("✅ Tabela de eventos extraída com sucesso!")
-            st.dataframe(eventos_df, use_container_width=True)
+    for file, quad in [(file_prev, q_prev), (file_curr, q_curr)]:
+        resultado = parse_pdf_otdr(
+            uploaded_file=file,
+            quadrimestre=quad,
+            distancia_troco_km=distancia_troco,
+            perda_maxima_dB=perda_maxima
+        )
+        resultados.append(resultado)
 
-            # Opção para download em Excel
-            excel_bytes = eventos_df.to_excel(index=False, engine="openpyxl")
-            st.download_button(
-                label="⬇️ Baixar tabela em Excel",
-                data=excel_bytes,
-                file_name="eventos_otdr.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    # Mostrar resumo
+    df_resumo = pd.DataFrame([{
+        "Fiber ID": r["Fiber ID"],
+        "Quadrimestre": r["Quadrimestre"],
+        "Distância Esperada (km)": r["Distância Esperada (km)"],
+        "Distância Testada (km)": r["Distância Testada (km)"],
+        "Perda Total (dB)": r["Perda Total (dB)"],
+        "Status": r["Status"]
+    } for r in resultados])
+    st.subheader("📊 Resultados Resumidos")
+    st.dataframe(df_resumo)
+
+    # Mostrar eventos detalhados
+    st.subheader("📍 Eventos Extraídos")
+    for r in resultados:
+        if isinstance(r["Eventos"], list):
+            st.write(f"### {r['Fiber ID']} - {r['Quadrimestre']}")
+            st.dataframe(pd.DataFrame(r["Eventos"]))
         else:
-            st.warning("⚠️ Nenhuma tabela de eventos foi encontrada no PDF.")
-    except Exception as e:
-        st.error(f"Erro ao processar o PDF: {e}")
+            st.write(f"### {r['Fiber ID']} - {r['Quadrimestre']}: Nenhum evento encontrado")
+
+    # Comparação perdas
+    st.subheader("🔎 Comparação entre quadrimestres")
+    diff = (resultados[1]["Perda Total (dB)"] or 0) - (resultados[0]["Perda Total (dB)"] or 0)
+    st.write(f"Variação da perda total: **{diff:.2f} dB** ({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})")
+
+    # Salvar Excel
+    if st.button("💾 Exportar para Excel"):
+        filename = salvar_relatorio(resultados)
+        st.success(f"Relatório salvo como {filename}")
+
+# Limpar histórico
+if st.button("🧹 Limpar histórico"):
+    if os.path.exists("relatorio_otdr_pdf.xlsx"):
+        os.remove("relatorio_otdr_pdf.xlsx")
+    st.success("Histórico limpo com sucesso!")
