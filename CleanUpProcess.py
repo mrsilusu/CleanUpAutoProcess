@@ -13,8 +13,8 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     Extrai:
       - Fiber ID (nome do arquivo no PDF)
       - Perda total
-      - Distância esperada
-      - Distância testada (último valor da coluna Distância na tabela de eventos)
+      - Distância esperada (entrada do usuário)
+      - Distância testada (maior valor da coluna Distância na tabela de eventos)
       - Eventos (tabela completa)
       - Status (OK, Partida, Atenuada)
     """
@@ -27,7 +27,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
         for page in pdf.pages:
             text = page.extract_text() or ""
 
-            # Procurar perda total no texto (backup caso não venha da tabela)
+            # Procurar perda total no texto (backup)
             match_perda = re.search(r"(perda total db|perda do trecho)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
             if match_perda:
                 perda_total = float(match_perda.group(2).replace(",", "."))
@@ -41,21 +41,23 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                 df = pd.DataFrame(table[1:], columns=table[0])
                 df.columns = [c.strip().lower() for c in df.columns]
 
-                # Se a tabela for a de eventos
+                # Se a tabela for a de eventos (contém coluna "evento" e "distância")
                 if "evento" in df.columns and "distância" in df.columns:
                     df["distância"] = pd.to_numeric(df["distância"], errors="coerce")
 
-                    # Distância testada = último valor da coluna distância
+                    # Distância testada = maior valor da coluna distância
                     if not df["distância"].dropna().empty:
-                        distancia_fibra = df["distância"].dropna().iloc[-1]
+                        distancia_fibra = df["distância"].max()
 
                     for _, row in df.iterrows():
                         try:
                             ev = {
                                 "Evento": row.get("evento"),
-                                "Distância Testada (km)": row.get("distância"),
-                                "Perda Total (dB)": row.get("perda"),
+                                "Distância (km)": row.get("distância"),
+                                "Perda (dB)": row.get("perda"),
                                 "Reflect. dB": row.get("reflect.", ""),
+                                "Declive": row.get("declive", ""),
+                                "Secção": row.get("secção", ""),
                                 "P. Total dB": row.get("p. total", "")
                             }
                             eventos.append(ev)
@@ -63,9 +65,11 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                             continue
 
                 # Tentar pegar perda total também das tabelas
-                if "perda total db" in df.columns:
+                if "p. total" in df.columns:
                     try:
-                        perda_total = float(df["perda total db"].dropna().iloc[-1])
+                        df["p. total"] = pd.to_numeric(df["p. total"], errors="coerce")
+                        if not df["p. total"].dropna().empty:
+                            perda_total = df["p. total"].max()
                     except:
                         pass
 
