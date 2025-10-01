@@ -76,7 +76,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
         "Fiber ID": fiber_id,
         "Quadrimestre": quadrimestre,
         "Distância Esperada (km)": distancia_troco_km,
-        "Distância Medida (km)": distancia_fibra,
+        "Distância Testada (km)": distancia_fibra,   # 🔹 atualizado aqui
         "Perda Total (dB)": perda_total,
         "Eventos Críticos (>0.2 dB)": ", ".join(map(str, eventos)) if eventos else "Nenhum",
         "Status": status
