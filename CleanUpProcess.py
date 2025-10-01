@@ -465,8 +465,7 @@ def main():
             with col1:
                 st.write(f"**{q_prev} - Dados do Excel**")
                 st.metric("Distância Testada", 
-                         f"{resultado_prev['Distância Testada (km)']} km" if resultado_prev['Distância Testada (km)'] else "N/A",
-                         delta=None)
+                         f"{resultado_prev['Distância Testada (km)']} km" if resultado_prev['Distância Testada (km)'] else "N/A")
                 st.metric("Perda Total", 
                          f"{resultado_prev['Perda Total (dB)']} dB" if resultado_prev['Perda Total (dB)'] else "N/A")
                 st.metric("Status", resultado_prev["Status"])
@@ -475,12 +474,11 @@ def main():
             with col2:
                 st.write(f"**{q_curr} - Dados do Excel**")
                 st.metric("Distância Testada", 
-                         f"{resultado_curr['Distância Testada (km)']} km" if resultado_curr['Distância Testada (km)'] else "N/A",
-                         delta=None)
+                         f"{resultado_curr['Distância Testada (km)']} km" if resultado_curr['Distância Testada (km)'] else "N/A")
                 st.metric("Perda Total", 
                          f"{resultado_curr['Perda Total (dB)']} dB" if resultado_curr['Perda Total (dB)'] else "N/A")
                 st.metric("Status", resultado_curr["Status"])
-                st.metric("Total de Tabelas", resultado_curr["Total_Tabelas"]
+                st.metric("Total de Tabelas", resultado_curr["Total_Tabelas"])
                 
         else:
             st.error("❌ Erro no processamento dos dados. Verifique os arquivos PDF.")
