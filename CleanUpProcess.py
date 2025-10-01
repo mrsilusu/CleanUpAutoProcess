@@ -14,7 +14,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
       - Fiber ID (nome do arquivo no PDF)
       - Perda total
       - Distância esperada
-      - Fim da Fibra Km -> Distância Testada (pega o MAIOR valor)
+      - Distância testada (extraída de "Fim da Fibra km" ou "Comprimento do trecho")
       - Eventos (tabela)
       - Status (OK, Partida, Atenuada)
     """
@@ -22,7 +22,6 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     perda_total = None
     distancia_fibra = None
     eventos = []
-    distancias_encontradas = []
 
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
@@ -33,15 +32,12 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
             if match_perda:
                 perda_total = float(match_perda.group(2).replace(",", "."))
 
-            # Procurar distância testada -> "Fim da Fibra Km"
-            matches_dist = re.findall(r"(fim da fibra km)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            for _, val in matches_dist:
-                try:
-                    distancias_encontradas.append(float(val.replace(",", ".")))
-                except:
-                    pass
+            # Procurar distância (Fim da fibra km ou Comprimento do trecho)
+            match_dist = re.search(r"(fim da fibra km|comprimento do trecho)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            if match_dist:
+                distancia_fibra = float(match_dist.group(2).replace(",", "."))
 
-            # Procurar tabelas
+            # Procurar tabelas (para eventos)
             tables = page.extract_tables()
             for table in tables:
                 if not table or len(table) < 2:
@@ -65,25 +61,12 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                         except Exception:
                             continue
 
-                # Perda total também pode estar em tabela
+                # Tentar pegar perda total também das tabelas
                 if "perda total db" in df.columns:
                     try:
                         perda_total = float(df["perda total db"].dropna().iloc[-1])
                     except:
                         pass
-
-                # Distância testada também pode estar como "fim da fibra"
-                if "fim da fibra" in df.columns:
-                    try:
-                        distancias_encontradas.extend(
-                            df["fim da fibra"].dropna().astype(str).str.replace(",", ".").astype(float).tolist()
-                        )
-                    except:
-                        pass
-
-    # Se várias distâncias foram encontradas, pegar o MAIOR valor
-    if distancias_encontradas:
-        distancia_fibra = max(distancias_encontradas)
 
     # Diagnóstico fibra
     status = "OK"
@@ -96,7 +79,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
         "Fiber ID": fiber_id,
         "Quadrimestre": quadrimestre,
         "Distância Esperada (km)": distancia_troco_km,
-        "Distância Testada (km)": distancia_fibra,
+        "Distância Testada (km)": distancia_fibra,   # ✅ Agora extraída do "Fim da Fibra km"
         "Perda Total (dB)": perda_total,
         "Eventos": eventos if eventos else "Nenhum",
         "Status": status
