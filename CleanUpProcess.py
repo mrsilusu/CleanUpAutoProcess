@@ -4,22 +4,21 @@ import pdfplumber
 import re
 import os
 import unicodedata
+import io  # 🔹 necessário para Excel em memória
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def normalize_header(s):
-    """Normaliza header: remove acentos, minuscula e espaços extras."""
     if s is None:
         return ""
     s = str(s).strip().lower()
     s = unicodedata.normalize("NFD", s)
-    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")  # remove acentos
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
     s = re.sub(r"\s+", " ", s)
     return s
 
 def clean_number_str(s):
-    """Limpa string numérica: substitui vírgula por ponto e extrai primeiro número válido."""
     if s is None:
         return None
     s = str(s).strip()
@@ -40,27 +39,15 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text() or ""
-            lines = text.splitlines()
-
-            # 🔹 Procurar explicitamente "Fim da Fibra Km"
-            for i, line in enumerate(lines):
-                if "fim da fibra" in normalize_header(line):
-                    if i + 1 < len(lines):
-                        val = clean_number_str(lines[i + 1])
-                        if val:
-                            try:
-                                distancia_fibra = float(val)
-                                distancias_encontradas.append(distancia_fibra)
-                            except:
-                                pass
-
-            # 🔹 Extrair tabelas
             tables = page.extract_tables()
+
             for table in tables:
                 if not table or len(table) < 2:
                     continue
 
                 header = table[0]
+                norm_header = [normalize_header(h) for h in header]
+
                 try:
                     df = pd.DataFrame(table[1:], columns=header)
                 except Exception:
@@ -73,15 +60,17 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                         col_map[col] = "evento"
                     elif "dist" in nh:
                         col_map[col] = "distancia"
+                    elif "p" in nh and "total" in nh:
+                        col_map[col] = "p_total"
                     elif "perda" in nh and "total" not in nh:
                         col_map[col] = "perda"
-                    elif "p. total" in nh or "p total" in nh:
-                        col_map[col] = "p_total"
-                    elif "reflect" in nh:
+                    elif "reflect" in nh or "reflet" in nh:
                         col_map[col] = "reflect"
+                    else:
+                        col_map[col] = nh.replace(" ", "_")
+
                 df = df.rename(columns=col_map)
 
-                # Eventos
                 if "distancia" in df.columns:
                     serie = df["distancia"].astype(str).map(clean_number_str)
                     nums = pd.to_numeric(serie, errors="coerce").dropna()
@@ -89,27 +78,26 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                         distancias_encontradas.extend(nums.tolist())
 
                     for _, row in df.iterrows():
-                        ev = {
-                            "Evento": row.get("evento"),
-                            "Distância (km)": float(clean_number_str(row.get("distancia") or 0)) if row.get("distancia") else None,
-                            "Perda (dB)": clean_number_str(row.get("perda")),
-                            "Reflect. dB": row.get("reflect"),
-                            "P. Total dB": clean_number_str(row.get("p_total"))
-                        }
+                        ev = {}
+                        ev["Evento"] = row.get("evento")
+                        raw_dist = row.get("distancia")
+                        dist_clean = clean_number_str(raw_dist)
+                        ev["Distância (km)"] = float(dist_clean) if dist_clean else None
+                        perda_val = row.get("perda") if "perda" in df.columns else row.get("p_total")
+                        ev["Perda (dB)"] = clean_number_str(perda_val)
+                        ev["Reflect. dB"] = row.get("reflect") if "reflect" in df.columns else None
+                        ev["P. Total dB"] = clean_number_str(row.get("p_total")) if "p_total" in df.columns else None
                         eventos.append(ev)
 
-                # Perda total
                 if "p_total" in df.columns:
                     serie_p = df["p_total"].astype(str).map(clean_number_str)
                     nums_p = pd.to_numeric(serie_p, errors="coerce").dropna()
                     if not nums_p.empty:
                         perda_total = float(nums_p.max())
 
-    # 🔹 Definir a distância testada como o maior valor encontrado
     if distancias_encontradas:
         distancia_fibra = max(distancias_encontradas)
 
-    # 🔹 Diagnóstico fibra
     status = "OK"
     if distancia_fibra is not None and distancia_fibra < distancia_troco_km * 0.95:
         status = "Partida"
@@ -127,9 +115,10 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     }
 
 # ==============================
-# Função salvar relatório
+# Função salvar relatório em memória
 # ==============================
-def salvar_relatorio(dados, filename="relatorio_otdr_pdf.xlsx"):
+def salvar_relatorio_memoria(dados):
+    output = io.BytesIO()
     df = pd.DataFrame([{
         "Fiber ID": d["Fiber ID"],
         "Quadrimestre": d["Quadrimestre"],
@@ -138,15 +127,16 @@ def salvar_relatorio(dados, filename="relatorio_otdr_pdf.xlsx"):
         "Perda Total (dB)": d["Perda Total (dB)"],
         "Status": d["Status"]
     } for d in dados])
-    df.to_excel(filename, index=False)
 
-    with pd.ExcelWriter(filename, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Resumo", index=False)
         for d in dados:
             if isinstance(d["Eventos"], list):
                 df_ev = pd.DataFrame(d["Eventos"])
                 df_ev.to_excel(writer, sheet_name=f"{d['Quadrimestre']}_eventos", index=False)
 
-    return filename
+    output.seek(0)
+    return output
 
 # ==============================
 # Função calcular perda máxima
@@ -203,23 +193,20 @@ if file_prev and file_curr:
     st.subheader("📊 Resultados Resumidos")
     st.dataframe(df_resumo)
 
-    st.subheader("📍 Eventos Extraídos")
-    for r in resultados:
-        if isinstance(r["Eventos"], list):
-            st.write(f"### {r['Fiber ID']} - {r['Quadrimestre']}")
-            st.dataframe(pd.DataFrame(r["Eventos"]))
-        else:
-            st.write(f"### {r['Fiber ID']} - {r['Quadrimestre']}: Nenhum evento encontrado")
+    # 🔹 Excel em memória
+    excel_mem = salvar_relatorio_memoria(resultados)
 
-    st.subheader("🔎 Comparação entre quadrimestres")
-    diff = (resultados[1]["Perda Total (dB)"] or 0) - (resultados[0]["Perda Total (dB)"] or 0)
-    st.write(f"Variação da perda total: **{diff:.2f} dB** ({resultados[0]['Quadrimestre']} → {resultados[1]['Quadrimestre']})")
+    # reutilizando o excel em memória dentro do app
+    xls = pd.ExcelFile(excel_mem)
+    df_resumo_xls = pd.read_excel(xls, sheet_name="Resumo")
 
-    if st.button("💾 Exportar para Excel"):
-        filename = salvar_relatorio(resultados)
-        st.success(f"Relatório salvo como {filename}")
+    st.subheader("📑 Resumo lido do Excel em memória")
+    st.dataframe(df_resumo_xls)
 
-if st.button("🧹 Limpar histórico"):
-    if os.path.exists("relatorio_otdr_pdf.xlsx"):
-        os.remove("relatorio_otdr_pdf.xlsx")
-    st.success("Histórico limpo com sucesso!")
+    # botão de download opcional
+    st.download_button(
+        label="💾 Baixar relatório Excel",
+        data=excel_mem,
+        file_name="relatorio_otdr_memoria.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
