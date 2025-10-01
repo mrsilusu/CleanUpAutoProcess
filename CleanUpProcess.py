@@ -14,7 +14,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
       - Fiber ID (nome do arquivo no PDF)
       - Perda total
       - Distância esperada
-      - Fim da Fibra Km -> Distância Testada
+      - Fim da Fibra Km -> Distância Testada (pega o MAIOR valor)
       - Eventos (tabela)
       - Status (OK, Partida, Atenuada)
     """
@@ -22,6 +22,7 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
     perda_total = None
     distancia_fibra = None
     eventos = []
+    distancias_encontradas = []
 
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
@@ -33,9 +34,12 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                 perda_total = float(match_perda.group(2).replace(",", "."))
 
             # Procurar distância testada -> "Fim da Fibra Km"
-            match_dist = re.search(r"(fim da fibra km)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
-            if match_dist:
-                distancia_fibra = float(match_dist.group(2).replace(",", "."))
+            matches_dist = re.findall(r"(fim da fibra km)\s*[:=]?\s*([\d.,]+)", text, re.IGNORECASE)
+            for _, val in matches_dist:
+                try:
+                    distancias_encontradas.append(float(val.replace(",", ".")))
+                except:
+                    pass
 
             # Procurar tabelas
             tables = page.extract_tables()
@@ -71,9 +75,15 @@ def parse_pdf_otdr(uploaded_file, quadrimestre, distancia_troco_km, perda_maxima
                 # Distância testada também pode estar como "fim da fibra"
                 if "fim da fibra" in df.columns:
                     try:
-                        distancia_fibra = float(df["fim da fibra"].dropna().astype(float).max())
+                        distancias_encontradas.extend(
+                            df["fim da fibra"].dropna().astype(str).str.replace(",", ".").astype(float).tolist()
+                        )
                     except:
                         pass
+
+    # Se várias distâncias foram encontradas, pegar o MAIOR valor
+    if distancias_encontradas:
+        distancia_fibra = max(distancias_encontradas)
 
     # Diagnóstico fibra
     status = "OK"
