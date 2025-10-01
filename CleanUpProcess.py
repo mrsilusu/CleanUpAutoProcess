@@ -104,79 +104,172 @@ def pdf_para_excel_memoria(uploaded_file):
     return output
 
 # ==============================
-# Extração de Dados do Excel em Memória - CORRIGIDA
+# Função MELHORADA: Extrair Fim da Fibra
 # ==============================
 def extrair_fim_fibra(dataframes):
-    """Busca 'Fim da Fibra Km' NAS TABELAS DO EXCEL e retorna valor da linha abaixo"""
+    """Busca 'Fim da Fibra Km' NAS TABELAS DO EXCEL com múltiplas estratégias"""
     
-    for df in dataframes:
+    st.sidebar.subheader("🔍 Buscando Fim da Fibra")
+    
+    for df_idx, df in enumerate(dataframes):
         # Converter DataFrame do Excel para busca
         df_str = df.astype(str)
         
-        # Debug: mostrar todas as células da primeira tabela para diagnóstico
-        if len(dataframes) > 0 and df.equals(dataframes[0]):
-            st.sidebar.write("🔍 **Debug - Primeiras linhas da primeira tabela:**")
-            for i in range(min(3, len(df_str))):
-                st.sidebar.write(f"Linha {i}: {df_str.iloc[i].tolist()}")
-        
-        # Procurar em todas as células do Excel
+        st.sidebar.write(f"**Tabela {df_idx+1}:** {df.shape[1]}x{df.shape[0]}")
+
+        # ESTRATÉGIA 1: Busca direta por "Fim da Fibra Km"
         for row_idx in range(len(df_str)):
             for col_idx in range(len(df_str.columns)):
                 celula = df_str.iloc[row_idx, col_idx].strip().lower()
                 
-                # Busca mais flexível - procura por partes do texto
-                if "fim" in celula and "fibra" in celula and "km" in celula:
-                    st.sidebar.success(f"✅ Encontrado 'Fim da Fibra Km' na linha {row_idx+1}, coluna {col_idx+1}")
+                # Busca flexível - várias variações possíveis
+                if any(term in celula for term in ["fim da fibra", "fim fibra", "fibra fim"]) and "km" in celula:
+                    st.sidebar.success(f"✅ Estratégia 1: Encontrado na linha {row_idx+1}, coluna {col_idx+1}")
+                    st.sidebar.info(f"📋 Célula encontrada: '{df_str.iloc[row_idx, col_idx]}'")
                     
-                    # Tentar linha abaixo primeiro
+                    # ESTRATÉGIA 1A: Valor na LINHA ABAIXO
                     if row_idx + 1 < len(df_str):
                         valor_abaixo = df_str.iloc[row_idx + 1, col_idx].strip()
-                        st.sidebar.info(f"📋 Valor na linha abaixo: '{valor_abaixo}'")
+                        st.sidebar.info(f"🔍 Valor linha abaixo: '{valor_abaixo}'")
                         numero_limpo = clean_number_str(valor_abaixo)
                         
                         if numero_limpo:
                             try:
                                 distancia = float(numero_limpo)
-                                st.sidebar.success(f"🎯 Distância extraída: {distancia} km")
+                                st.sidebar.success(f"🎯 DISTÂNCIA ENCONTRADA: {distancia} km")
                                 return distancia
                             except ValueError:
                                 pass
                     
-                    # Se não encontrou na linha abaixo, procurar na mesma linha à direita
-                    for right_col in range(col_idx + 1, len(df_str.columns)):
+                    # ESTRATÉGIA 1B: Valor na MESMA LINHA (à direita)
+                    for right_col in range(col_idx + 1, min(col_idx + 4, len(df_str.columns))):
                         valor_direita = df_str.iloc[row_idx, right_col].strip()
-                        numero_limpo = clean_number_str(valor_direita)
-                        if numero_limpo:
-                            try:
-                                distancia = float(numero_limpo)
-                                st.sidebar.success(f"🎯 Distância extraída (mesma linha): {distancia} km")
-                                return distancia
-                            except ValueError:
-                                continue
-                
-                # Busca alternativa apenas por "fim da fibra"
-                elif "fim da fibra" in celula:
-                    st.sidebar.success(f"✅ Encontrado 'Fim da Fibra' na linha {row_idx+1}, coluna {col_idx+1}")
-                    
-                    # Procurar por valor numérico nas células vizinhas
-                    for r in range(max(0, row_idx-1), min(len(df_str), row_idx+2)):
-                        for c in range(max(0, col_idx-1), min(len(df_str.columns), col_idx+2)):
-                            if r == row_idx and c == col_idx:
-                                continue  # Pular a célula do cabeçalho
-                            
-                            valor_vizinho = df_str.iloc[r, c].strip()
-                            numero_limpo = clean_number_str(valor_vizinho)
+                        if valor_direita:
+                            st.sidebar.info(f"🔍 Valor à direita (col {right_col+1}): '{valor_direita}'")
+                            numero_limpo = clean_number_str(valor_direita)
                             if numero_limpo:
                                 try:
                                     distancia = float(numero_limpo)
-                                    st.sidebar.success(f"🎯 Distância extraída (vizinha): {distancia} km")
+                                    st.sidebar.success(f"🎯 DISTÂNCIA ENCONTRADA: {distancia} km")
                                     return distancia
                                 except ValueError:
                                     continue
+        
+        # ESTRATÉGIA 2: Busca por padrão de tabela de resumo
+        # Procura por linha que tenha "fiber" no nome e número na coluna de distância
+        for row_idx in range(min(5, len(df_str))):  # Só nas primeiras linhas
+            linha = df_str.iloc[row_idx].tolist()
+            st.sidebar.info(f"🔍 Linha {row_idx+1}: {linha}")
+            
+            # Verifica se esta linha parece ser um cabeçalho de resumo
+            if any("fibra" in str(cel).lower() for cel in linha) or any("fim" in str(cel).lower() for cel in linha):
+                st.sidebar.info(f"📋 Possível linha de cabeçalho encontrada na linha {row_idx+1}")
+                
+                # Procura números nas linhas abaixo
+                for next_row in range(row_idx + 1, min(row_idx + 3, len(df_str))):
+                    next_linha = df_str.iloc[next_row].tolist()
+                    st.sidebar.info(f"🔍 Linha {next_row+1} (abaixo): {next_linha}")
+                    
+                    for celula in next_linha:
+                        numero_limpo = clean_number_str(celula)
+                        if numero_limpo:
+                            try:
+                                num = float(numero_limpo)
+                                if 1 < num < 200:  # Faixa plausível para fibra
+                                    st.sidebar.success(f"🎯 DISTÂNCIA ENCONTRADA (E2): {num} km")
+                                    return num
+                            except ValueError:
+                                continue
+
+        # ESTRATÉGIA 3: Busca por maiores números na tabela (fallback)
+        maiores_numeros = []
+        for row_idx in range(len(df_str)):
+            for col_idx in range(len(df_str.columns)):
+                valor = df_str.iloc[row_idx, col_idx].strip()
+                numero_limpo = clean_number_str(valor)
+                if numero_limpo:
+                    try:
+                        num = float(numero_limpo)
+                        if 10 < num < 200:  # Faixa plausível para distância de fibra
+                            maiores_numeros.append((num, row_idx, col_idx))
+                    except ValueError:
+                        continue
+        
+        if maiores_numeros:
+            maiores_numeros.sort(reverse=True)
+            maior_numero = maiores_numeros[0][0]
+            st.sidebar.success(f"🎯 DISTÂNCIA (Fallback - maior número): {maior_numero} km")
+            return maior_numero
     
-    # Se não encontrou, tentar buscar o maior número na tabela (como fallback)
-    st.sidebar.warning("⚠️ Buscando fallback - maior número nas tabelas")
-    maior_numero = None
+    # ESTRATÉGIA 4: Busca no texto completo como última opção
+    st.sidebar.warning("🔍 Estratégia 4: Buscando no texto completo...")
+    for df in dataframes:
+        texto_completo = " ".join(df.astype(str).values.flatten())
+        # Procura por padrões como "60.285 km", "102.027 km", etc.
+        padroes = re.findall(r'(\d+\.\d+)\s*km', texto_completo, re.IGNORECASE)
+        for padrao in padroes:
+            try:
+                num = float(padrao)
+                if 10 < num < 200:
+                    st.sidebar.success(f"🎯 DISTÂNCIA (Regex): {num} km")
+                    return num
+            except ValueError:
+                continue
+    
+    st.sidebar.error("❌ NENHUMA DISTÂNCIA ENCONTRADA em nenhuma estratégia")
+    return None
+
+# ==============================
+# Função MELHORADA: Extrair Perda Total
+# ==============================
+def extrair_perda_total_eventos(dataframes):
+    """Extrai perda total e eventos com múltiplas estratégias"""
+    
+    perda_total = None
+    eventos = []
+    
+    st.sidebar.subheader("📊 Buscando Perda Total")
+    
+    for df in dataframes:
+        df_str = df.astype(str)
+        
+        # ESTRATÉGIA 1: Busca por "Perda Total dB"
+        for row_idx in range(len(df_str)):
+            for col_idx in range(len(df_str.columns)):
+                celula = df_str.iloc[row_idx, col_idx].strip().lower()
+                
+                if "perda total" in celula and "db" in celula:
+                    st.sidebar.success(f"✅ 'Perda Total dB' encontrado na linha {row_idx+1}, coluna {col_idx+1}")
+                    
+                    # Procurar valor na mesma linha ou linha abaixo
+                    if row_idx + 1 < len(df_str):
+                        valor_perda = df_str.iloc[row_idx + 1, col_idx].strip()
+                        st.sidebar.info(f"🔍 Valor abaixo: '{valor_perda}'")
+                        perda_limpa = clean_number_str(valor_perda)
+                        if perda_limpa:
+                            try:
+                                perda_total = float(perda_limpa)
+                                st.sidebar.success(f"📊 PERDA TOTAL: {perda_total} dB")
+                                return perda_total, eventos
+                            except ValueError:
+                                pass
+                    
+                    # Procurar na mesma linha
+                    for right_col in range(col_idx + 1, min(col_idx + 4, len(df_str.columns))):
+                        valor_direita = df_str.iloc[row_idx, right_col].strip()
+                        if valor_direita:
+                            st.sidebar.info(f"🔍 Valor à direita: '{valor_direita}'")
+                            perda_limpa = clean_number_str(valor_direita)
+                            if perda_limpa:
+                                try:
+                                    perda_total = float(perda_limpa)
+                                    st.sidebar.success(f"📊 PERDA TOTAL: {perda_total} dB")
+                                    return perda_total, eventos
+                                except ValueError:
+                                    continue
+    
+    # ESTRATÉGIA 2: Busca por números na faixa de perda
+    st.sidebar.warning("🔍 Buscando perda por fallback...")
     for df in dataframes:
         df_str = df.astype(str)
         for row_idx in range(len(df_str)):
@@ -186,61 +279,18 @@ def extrair_fim_fibra(dataframes):
                 if numero_limpo:
                     try:
                         num = float(numero_limpo)
-                        if num > 10 and num < 200:  # Faixa plausível para distância de fibra
-                            if maior_numero is None or num > maior_numero:
-                                maior_numero = num
+                        if 0.1 < num < 50:  # Faixa plausível para perda
+                            # Verificar se está perto de texto relacionado a perda
+                            celula = df_str.iloc[row_idx, col_idx].lower()
+                            if any(term in celula for term in ['db', 'perda', 'loss']):
+                                perda_total = num
+                                st.sidebar.success(f"📊 PERDA (Fallback): {perda_total} dB")
+                                return perda_total, eventos
                     except ValueError:
                         continue
     
-    if maior_numero:
-        st.sidebar.success(f"🎯 Distância (fallback): {maior_numero} km")
-        return maior_numero
-    
-    st.sidebar.error("❌ Não foi possível encontrar o Fim da Fibra")
-    return None
-
-def extrair_perda_total_eventos(dataframes):
-    """Extrai perda total e eventos DAS TABELAS DO EXCEL"""
-    
-    perda_total = None
-    eventos = []
-    
-    for df in dataframes:
-        df_str = df.astype(str)
-        
-        # Buscar "Perda Total dB" no Excel
-        for row_idx in range(len(df_str)):
-            for col_idx in range(len(df_str.columns)):
-                celula = df_str.iloc[row_idx, col_idx].strip().lower()
-                
-                if "perda total" in celula and "db" in celula:
-                    st.sidebar.info(f"📊 Encontrado 'Perda Total dB' na linha {row_idx+1}, coluna {col_idx+1}")
-                    
-                    # Procurar valor na mesma linha ou linha abaixo
-                    if row_idx + 1 < len(df_str):
-                        valor_perda = df_str.iloc[row_idx + 1, col_idx].strip()
-                        st.sidebar.info(f"📋 Valor perda: '{valor_perda}'")
-                        perda_limpa = clean_number_str(valor_perda)
-                        if perda_limpa:
-                            try:
-                                perda_total = float(perda_limpa)
-                                st.sidebar.success(f"📊 Perda total extraída: {perda_total} dB")
-                            except ValueError:
-                                continue
-                    
-                    # Procurar na mesma linha
-                    for right_col in range(col_idx + 1, len(df_str.columns)):
-                        valor_direita = df_str.iloc[row_idx, right_col].strip()
-                        perda_limpa = clean_number_str(valor_direita)
-                        if perda_limpa:
-                            try:
-                                perda_total = float(perda_limpa)
-                                st.sidebar.success(f"📊 Perda total extraída (mesma linha): {perda_total} dB")
-                                break
-                            except ValueError:
-                                continue
-    
-    return perda_total, eventos
+    st.sidebar.error("❌ NENHUMA PERDA ENCONTRADA")
+    return None, eventos
 
 def determinar_status(distancia_fibra, perda_total, distancia_troco_km, perda_maxima_dB):
     """Determina o status da fibra baseado nos parâmetros"""
@@ -273,8 +323,6 @@ def processar_excel_memoria(excel_file, uploaded_file, quadrimestre, distancia_t
         for sheet_name in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sheet_name)
             dados_combinados.append(df)
-            
-            st.sidebar.write(f"📄 ABA: {sheet_name} | {df.shape[1]} colunas | {df.shape[0]} linhas")
 
         # EXTRAIR DADOS DO EXCEL (nunca do PDF)
         distancia_fibra = extrair_fim_fibra(dados_combinados)
