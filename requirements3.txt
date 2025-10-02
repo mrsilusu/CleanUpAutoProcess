@@ -1,7 +1,5 @@
 streamlit
 pandas
 pdfplumber
-fuzzywuzzy
-python-levenshtein
+fuzzywuzzy  # Este funciona em Python puro sem o python-levenshtein
 openpyxl
-build-essential
