@@ -34,14 +34,11 @@ def convert_pdf_to_dataframe(pdf_file_bytes):
                 tabelas_pagina = page.extract_tables() 
                 
                 for table in tabelas_pagina:
-                    # Garantir que a tabela não está vazia
                     if table and len(table) > 1 and table[0] is not None:
-                        # O primeiro elemento é o cabeçalho, o resto são os dados
-                        # Nota: Em tabelas muito soltas, pode ser necessário forçar a atribuição de nomes de colunas
                         try:
                             df = pd.DataFrame(table[1:], columns=table[0])
                         except ValueError:
-                            # Caso o número de cabeçalhos não corresponda ao número de colunas
+                            # Tratamento de erro para cabeçalhos inconsistentes
                             st.warning("⚠️ Ajuste de colunas necessário: usando a primeira linha como cabeçalho de fallback.")
                             df = pd.DataFrame(table[1:])
                             df.columns = [f'Col_{i}' for i in range(len(df.columns))]
@@ -100,7 +97,8 @@ def dynamic_fuzzy_search(df, user_query, threshold=85):
                 'score': best_score
             }
         else:
-            return {'error': f'Correspondência encontrada em '{df.loc[row_index, col_name]}', mas é a última linha e não há célula abaixo para retornar.'}
+            # ERRO DE SINTAXE CORRIGIDO AQUI!
+            return {'error': f"Correspondência encontrada em '{df.loc[row_index, col_name]}', mas é a última linha e não há célula abaixo para retornar."}
     
     return {'error': f'Nenhuma correspondência com similaridade acima de {threshold}% encontrada para a busca: "{user_query}".'}
 
@@ -138,7 +136,6 @@ if st.session_state['df_excel'] is not None:
 
     if st.button("Executar Busca Dinâmica e Retornar Valor Abaixo"):
         if search_query:
-            # Chama a nova função de busca dinâmica
             result = dynamic_fuzzy_search(df, search_query)
 
             if 'value_below' in result:
