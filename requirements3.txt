@@ -4,3 +4,4 @@ pdfplumber
 fuzzywuzzy
 python-levenshtein
 openpyxl
+build-essential
