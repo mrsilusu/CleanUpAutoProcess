@@ -1,5 +1,0 @@
-streamlit
-pandas
-pdfplumber
-fuzzywuzzy  # Este funciona em Python puro sem o python-levenshtein
-openpyxl
